@@ -542,11 +542,12 @@ def start_reactor(host, port, factory, ish=True, daemon=False, rs=True,
                     jlog.error("Tried 100 ports but cannot listen on any of them. Quitting.")
                     sys.exit(EXIT_FAILURE)
                 port += 1
-    if usessl:
-        ctx = ClientContextFactory()
-        reactor.connectSSL(host, port, factory, ctx)
-    else:
-        reactor.connectTCP(host, port, factory)
+    if factory: # allow option to start up without immediately creating a client factory.
+        if usessl:
+            ctx = ClientContextFactory()
+            reactor.connectSSL(host, port, factory, ctx)
+        else:
+            reactor.connectTCP(host, port, factory)
     if rs:
         if not gui:
             reactor.run(installSignalHandlers=ish)
