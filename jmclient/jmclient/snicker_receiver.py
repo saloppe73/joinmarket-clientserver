@@ -1,6 +1,9 @@
 #! /usr/bin/env python
 
 import sys
+import os
+from twisted.application.service import Service
+from twisted.internet import task
 
 import jmbitcoin as btc
 from jmclient.configure import jm_single
@@ -11,6 +14,44 @@ jlog = get_log()
 
 class SNICKERError(Exception):
     pass
+
+class SNICKERReceiverService(Service):
+    def __init__(self, receiver):
+        assert isinstance(receiver, SNICKERReceiver)
+        self.receiver = receiver
+        # main monitor loop
+        self.monitor_loop = task.LoopingCall(self.receiver.poll_for_proposals)
+
+    def startService(self):
+        """ Encapsulates start up actions.
+        This service depends on the receiver's
+        wallet service to start, so wait for that.
+        """
+        self.wait_for_wallet = task.LoopingCall(self.wait_for_wallet_sync)
+        self.wait_for_wallet.start(5.0)
+
+    def wait_for_wallet_sync(self):
+        if self.receiver.wallet_service.isRunning():
+            jlog.info("SNICKER service starting because wallet service is up.")
+            self.wait_for_wallet.stop()
+            self.monitor_loop.start(5.0)
+            super().startService()
+
+    def stopService(self, wallet=False):
+        """ Encapsulates shut down actions.
+        Optionally also shut down the underlying
+        wallet service (default False).
+        """
+        if self.monitor_loop:
+            self.monitor_loop.stop()
+        if wallet:
+            self.receiver.wallet_service.stopService()
+        super().stopService()
+
+    def isRunning(self):
+        if self.running == 1:
+            return True
+        return False
 
 class SNICKERReceiver(object):
     supported_flags = []
@@ -72,6 +113,10 @@ class SNICKERReceiver(object):
         must be optional.
         """
         new_proposals = []
+        if not os.path.exists(self.proposals_source):
+            with open(self.proposals_source, "wb") as f:
+                jlog.info("created proposals source file.")
+
         with open(self.proposals_source, "rb") as f:
             current_entries = f.readlines()
         for entry in current_entries:
@@ -200,7 +245,9 @@ class SNICKERReceiver(object):
 
                     # TODO condition on automatic brdcst or not
                     if not jm_single().bc_interface.pushtx(tx.serialize()):
-                        jlog.error("Failed to broadcast SNICKER CJ.")
+                        jlog.error("Failed to broadcast SNICKER Coinjoin.")
+                        jlog.info("Here is the transaction: ")
+                        jlog.info(btc.human_readable_transaction(tx))
                         return False
                     self.successful_txs.append(tx)
                     return True
