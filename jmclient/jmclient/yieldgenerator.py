@@ -5,6 +5,7 @@ import os
 import time
 import abc
 from twisted.python.log import startLogging
+from twisted.application.service import Service
 from optparse import OptionParser
 from jmbase import get_log
 from jmclient import Maker, jm_single, load_program_config, \
@@ -187,6 +188,42 @@ class YieldGeneratorBasic(YieldGenerator):
         cjoutmix = (input_mixdepth + 1) % (self.wallet_service.mixdepth + 1)
         return self.wallet_service.get_internal_addr(cjoutmix)
 
+class YieldGeneratorService(Service):
+    def __init__(self, wallet_service, yg_config):
+        self.wallet_service = wallet_service
+        self.yg_config = yg_config
+        self.yieldgen = None
+
+    def startService(self):
+        """ We instantiate the Maker class only
+        here as its constructor will automatically
+        create orders based on the wallet.
+        Note makers already intrinsically handle
+        not-yet-synced wallet services, so there is
+        no need to check this here.
+        """
+        # TODO genericise to any YG class:
+        self.yieldgen = YieldGeneratorBasic(self.wallet_service, self.yg_config)
+        self.clientfactory = JMClientProtocolFactory(maker, proto_type="MAKER")
+
+        nodaemon = jm_single().config.getint("DAEMON", "no_daemon")
+        daemon = True if nodaemon == 1 else False
+        if jm_single().config.get("BLOCKCHAIN", "network") in ["regtest", "testnet"]:
+            startLogging(sys.stdout)
+        # here 'start_reactor' does not start the reactor but instantiates
+        # the connection to the daemon backend.
+        start_reactor(jm_single().config.get("DAEMON", "daemon_host"),
+                      jm_single().config.getint("DAEMON", "daemon_port"),
+                      self.clientfactory, rs=False)
+        super().startService()
+
+    def stopService(self):
+        """ TODO need a method exposed to gracefully
+        shut down a maker bot.
+        """
+        jlog.info("Shutting down YieldGenerator service.")
+        self.clientfactory.proto_client.request_mc_shutdown()
+        super().stopService()
 
 def ygmain(ygclass, txfee=1000, cjfee_a=200, cjfee_r=0.002, ordertype='reloffer',
            nickserv_password='', minsize=100000, gaplimit=6):
