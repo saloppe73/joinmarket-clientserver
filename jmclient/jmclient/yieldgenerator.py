@@ -9,7 +9,7 @@ from optparse import OptionParser
 from jmbase import get_log
 from jmclient import Maker, jm_single, load_program_config, \
     JMClientProtocolFactory, start_reactor, calc_cj_fee, \
-    WalletService, add_base_options
+    WalletService, add_base_options, SNICKERClientProtocolFactory
 from .wallet_utils import open_test_wallet_maybe, get_wallet_path
 from jmbase.support import EXIT_ARGERROR, EXIT_FAILURE
 
@@ -274,11 +274,15 @@ def ygmain(ygclass, txfee=1000, cjfee_a=200, cjfee_r=0.002, ordertype='reloffer'
                              ordertype, minsize])
     jlog.info('starting yield generator')
     clientfactory = JMClientProtocolFactory(maker, proto_type="MAKER")
-
+    if jm_single().config.get("SNICKER", "enabled") == "true":
+        snicker_factory = SNICKERClientProtocolFactory()
+    else:
+        snicker_factory = None
     nodaemon = jm_single().config.getint("DAEMON", "no_daemon")
     daemon = True if nodaemon == 1 else False
     if jm_single().config.get("BLOCKCHAIN", "network") in ["regtest", "testnet"]:
         startLogging(sys.stdout)
     start_reactor(jm_single().config.get("DAEMON", "daemon_host"),
                       jm_single().config.getint("DAEMON", "daemon_port"),
-                      clientfactory, daemon=daemon)
+                      clientfactory, snickerfactory=snicker_factory,
+                      daemon=daemon)

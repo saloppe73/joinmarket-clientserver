@@ -9,7 +9,7 @@ import hashlib
 
 from jmbitcoin.secp256k1_main import *
 from jmbase import bintohex, utxo_to_utxostr
-from bitcointx.core import (CMutableTransaction, Hash160, CTxInWitness,
+from bitcointx.core import (CMutableTransaction, CTxInWitness,
                             CMutableOutPoint, CMutableTxIn, CTransaction,
                             CMutableTxOut, CTxIn, CTxOut, ValidationError)
 from bitcointx.core.script import *
@@ -332,3 +332,38 @@ def verify_tx_input(tx, i, scriptSig, scriptPubKey, amount=None, witness=None):
     except ValidationError as e:
         return False
     return True
+
+def extract_witness(tx, i):
+    """Given `tx` of type CTransaction, extract,
+    as a list of objects of type CScript, which constitute the
+    witness at the index i, followed by "success".
+    If the witness is not present for this index, (None, "errmsg")
+    is returned.
+    Callers must distinguish the case 'tx is unsigned' from the
+    case 'input is not type segwit' externally.
+    """
+    assert isinstance(tx, CTransaction)
+    assert i >= 0
+    if not tx.has_witness():
+        return None, "Tx witness not present"
+    if len(tx.vin) < i:
+        return None, "invalid input index"
+    witness = tx.wit.vtxinwit[i]
+    return (witness, "success")
+
+def extract_pubkey_from_witness(tx, i):
+    """ Extract the pubkey used to sign at index i,
+    in CTransaction tx, assuming it is of type p2wpkh
+    (including wrapped segwit version).
+    Returns (pubkey, "success") or (None, "errmsg").
+    """
+    witness, msg = extract_witness(tx, i)
+    sWitness = [a for a in iter(witness.scriptWitness)]
+    if not sWitness:
+        return None, msg
+    else:
+        if len(sWitness) != 2:
+            return None, "invalid witness for p2wpkh."
+        if not is_valid_pubkey(sWitness[1], True):
+            return None, "invalid pubkey in witness"
+        return secp256k1.PublicKey(sWitness[1]), "success"

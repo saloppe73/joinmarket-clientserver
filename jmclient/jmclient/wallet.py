@@ -1274,6 +1274,35 @@ class SNICKERWalletMixin(object):
     def __init__(self, storage, **kwargs):
         super().__init__(storage, **kwargs)
 
+    def check_tweak_matches_and_import(self, addr, tweak, tweaked_key,
+                                       source_mixdepth):
+        """ Given the address from our HD wallet, the tweak bytes and
+        the tweaked public key, check the tweak correctly generates the
+        claimed tweaked public key. If not, (False, errmsg is returned),
+        if so, we import the private key to a mixdepth *distinct* from
+        source_mixdepth, and (True, None) is returned, if it works.
+        """
+        try:
+            priv = self.get_key_from_addr(addr)
+        except:
+            return False, "Not our address"
+        tweaked_privkey = btc.snicker_privkey_tweak(priv, tweak)
+        if not btc.privkey_to_pubkey(tweaked_privkey) == tweaked_key:
+            hextk = bintohex(tweaked_key)
+            hexftpk = bintohex(btc.privkey_to_pubkey(tweaked_privkey))
+            return False, ("Was not able to recover tweaked pubkey "
+                           "from tweaked privkey - code error."
+                           "Expected: " + hextk + ", got: " + hexftpk)
+        # note that the WIF is not preserving SPK type, it's implied
+        # for the wallet.
+        try:
+            self.import_private_key((source_mixdepth + 1) % (self.mixdepth + 1),
+                                self._ENGINE.privkey_to_wif(tweaked_privkey))
+            self.save()
+        except:
+            return False, "Failed to import private key."
+        return True, None
+
     def create_snicker_proposal(self, our_input, their_input, our_input_utxo,
                                 their_input_utxo, net_transfer, network_fee,
                                 our_priv, their_pub, our_spk, change_spk,
@@ -1328,8 +1357,14 @@ class SNICKERWalletMixin(object):
         # now we create the ecdh based tweak:
         tweak_bytes = btc.ecdh(our_priv[:-1], their_pub)
         tweaked_pub = btc.snicker_pubkey_tweak(their_pub, tweak_bytes)
-        # TODO: remove restriction to one scriptpubkey type
-        tweaked_spk = btc.pubkey_to_p2sh_p2wpkh_script(tweaked_pub)
+        wtype = self.get_txtype()
+        if wtype == "p2wpkh":
+            tweaked_spk = btc.pubkey_to_p2wpkh_script(tweaked_pub)
+        elif wtype == "p2sh-p2wpkh":
+            tweaked_spk = btc.pubkey_to_p2sh_p2wpkh_script(tweaked_pub)
+        else:
+            raise NotImplementedError("SNICKER only supports "
+                                      "p2sh-p2wpkh or p2wpkh outputs.")
         tweaked_addr, our_addr, change_addr = [str(
             btc.CCoinAddress.from_scriptPubKey(x)) for x in (
                 tweaked_spk, expected_spk, change_spk)]
@@ -1341,7 +1376,8 @@ class SNICKERWalletMixin(object):
         assert all([x["value"] > 0 for x in outputs])
 
         # version and locktime as currently specified in the BIP
-        # for 0/1 version SNICKER.
+        # for 0/1 version SNICKER. (Note the locktime is partly because
+        # of expected delays).
         tx = btc.make_shuffled_tx([our_input, their_input], outputs,
                               version=2, locktime=0)
         # we need to know which randomized input is ours:
@@ -1355,9 +1391,7 @@ class SNICKERWalletMixin(object):
             spent_outs = spent_outs[::-1]
         # create the psbt and then sign our input.
         snicker_psbt = self.create_psbt_from_tx(tx, spent_outs=spent_outs)
-
         # having created the PSBT, sign our input
-        # TODO this requires bitcointx updated minor version else fails
         signed_psbt_and_signresult, err = self.sign_psbt(
         snicker_psbt.serialize(), with_sign_result=True)
         assert err is None
@@ -1376,7 +1410,7 @@ class SNICKERWalletMixin(object):
         # we apply ECIES in the form given by the BIP.
         return btc.ecies_encrypt(snicker_serialized_message, their_pub)
 
-    def parse_proposal_to_signed_tx(self, privkey, proposal,
+    def parse_proposal_to_signed_tx(self, addr, proposal,
                                     acceptance_callback):
         """ Given a candidate privkey (binary and compressed format),
         and a candidate encrypted SNICKER proposal, attempt to decrypt
@@ -1399,6 +1433,11 @@ class SNICKERWalletMixin(object):
         Note: flags is currently always None as version is only 0 or 1.
         """
         assert isinstance(self, PSBTWalletMixin)
+
+        try:
+            privkey = self.get_key_from_addr(addr)
+        except:
+            return None, "Could not derive privkey from address"
 
         our_pub = btc.privkey_to_pubkey(privkey)
 
@@ -1448,7 +1487,7 @@ class SNICKERWalletMixin(object):
         if not len(utx.vin) == 2:
             return None, "PSBT proposal does not contain 2 inputs."
         testsignresult = cpsbt.sign(btc.KeyStore(), finalize=False)
-        print("got sign result: ", testsignresult)
+
         # Note: "num_inputs_signed" refers to how many *we* signed,
         # which is obviously none here as we provided no keys.
         if not (testsignresult.num_inputs_signed == 0 and \
@@ -1477,10 +1516,15 @@ class SNICKERWalletMixin(object):
 
         # To allow the acceptance callback to assess validity, we must identify
         # which input is ours and which is(are) not.
-        # TODO This check may (will) change if we allow non-p2sh-pwpkh inputs:
+        # See https://github.com/Simplexum/python-bitcointx/issues/39
+        # for background on why this is different per wallet type
         unsigned_index = -1
         for i, psbtinputsigninfo in enumerate(testsignresult.inputs_info):
             if psbtinputsigninfo is None:
+                unsigned_index = i
+                break
+            if psbtinputsigninfo.num_new_sigs == 0 and \
+               psbtinputsigninfo.is_final == False:
                 unsigned_index = i
                 break
         assert unsigned_index != -1

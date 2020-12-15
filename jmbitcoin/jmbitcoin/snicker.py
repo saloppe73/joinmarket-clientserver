@@ -34,16 +34,23 @@ def snicker_privkey_tweak(priv, tweak):
     base_priv = secp256k1.PrivateKey(priv)
     return base_priv.add(tweak).secret + b'\x01'
 
-def verify_snicker_output(tx, pub, tweak, spk_type='p2sh-p2wpkh'):
+def verify_snicker_output(tx, pub, tweak, spk_type="p2wpkh"):
     """ A convenience function to check that one output address in a transaction
     is a SNICKER-type tweak of an existing key. Returns the index of the output
     for which this is True (and there must be only 1), and the derived spk,
     or -1 and None if it is not found exactly once.
-    TODO Add support for other scriptPubKey types.
+    Only standard segwit spk types (as used in Joinmarket) are supported.
     """
     assert isinstance(tx, btc.CTransaction)
     expected_destination_pub = snicker_pubkey_tweak(pub, tweak)
-    expected_destination_spk = pubkey_to_p2sh_p2wpkh_script(expected_destination_pub)
+    if spk_type == "p2wpkh":
+        expected_destination_spk = pubkey_to_p2wpkh_script(
+            expected_destination_pub)
+    elif spk_type == "p2sh-p2wpkh":
+        expected_destination_spk = pubkey_to_p2sh_p2wpkh_script(
+            expected_destination_pub)
+    else:
+        assert False, "JM SNICKER only supports p2sh/p2wpkh"
     found = 0
     for i, o in enumerate(tx.vout):
         if o.scriptPubKey == expected_destination_spk:

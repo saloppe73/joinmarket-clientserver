@@ -349,6 +349,26 @@ tor_control_port = 9051
 # this feature is not yet implemented in code, but here for the
 # future:
 hidden_service_ssl = false
+
+[SNICKER]
+
+# any other value than 'true' will be treated as False,
+# and no SNICKER actions will be enabled in that case:
+enabled = false
+
+# in satoshis, we require any SNICKER to pay us at least
+# this much (can be negative), otherwise we will refuse
+# to sign it:
+lowest_net_gain = 0
+
+# comma separated list of servers (if port is omitted as :port, it
+# is assumed to be 80) which we will poll against (all, in sequence); note
+# that they are allowed to be *.onion or cleartext servers, and no
+# scheme (http(s) etc) needs to be added to the start.
+servers = cn5lfwvrswicuxn3gjsxoved6l2gu5hdvwy5l3ev7kg6j7lbji2k7hqd.onion,
+
+# how many minutes between each polling event to each server above:
+polling_interval_minutes = 0.2
 """
 
 #This allows use of the jmclient package with a
