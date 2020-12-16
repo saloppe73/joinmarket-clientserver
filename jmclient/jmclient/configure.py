@@ -368,7 +368,7 @@ lowest_net_gain = 0
 servers = cn5lfwvrswicuxn3gjsxoved6l2gu5hdvwy5l3ev7kg6j7lbji2k7hqd.onion,
 
 # how many minutes between each polling event to each server above:
-polling_interval_minutes = 0.2
+polling_interval_minutes = 60
 """
 
 #This allows use of the jmclient package with a
