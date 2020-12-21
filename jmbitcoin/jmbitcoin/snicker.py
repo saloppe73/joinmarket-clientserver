@@ -6,6 +6,7 @@
 from jmbitcoin.secp256k1_ecies import *
 from jmbitcoin.secp256k1_main import *
 from jmbitcoin.secp256k1_transaction import *
+from collections import Counter
 
 SNICKER_MAGIC_BYTES = b'SNICKER'
 
@@ -59,3 +60,65 @@ def verify_snicker_output(tx, pub, tweak, spk_type="p2wpkh"):
     if found != 1:
         return -1, None
     return found_index, expected_destination_spk
+
+def is_snicker_tx(tx, snicker_version=bytes([1])):
+    """ Returns True if the CTransaction object `tx`
+    fits the pattern of a SNICKER coinjoin of type
+    defined in `snicker_version`, or False otherwise.
+    """
+    if not snicker_version == b"\x01":
+        raise NotImplementedError("Only v1 SNICKER currently implemented.")
+    return is_snicker_v1_tx(tx)
+
+def is_snicker_v1_tx(tx):
+    """ We expect:
+    * 2 equal outputs, same script type, pubkey hash variant.
+    * 1 other output (0 is negligible probability hence ignored - if it
+      was included it would create a lot of false positives).
+    * Exactly 2 inputs, same script type, pubkey hash variant.
+    * Input sequence numbers are both 0xffffffff
+    * nVersion 2
+    * nLockTime 0
+    The above rules are for matching the v1 variant of SNICKER.
+    """
+    assert isinstance(tx, CTransaction)
+    if tx.nVersion != 2:
+        return False
+    if tx.nLockTime != 0:
+        return False
+    if len(tx.vin) != 2:
+        return False
+    if len(tx.vout) != 3:
+        return False
+    for vi in tx.vin:
+        if vi.nSequence != 0xffffffff:
+            return False
+    # identify if there are two equal sized outs
+    c = Counter([vo.nValue for vo in tx.vout])
+    equal_out = -1
+    for x in c:
+        if c[x] not in [1, 2]:
+            # note three equal outs technically agrees
+            # with spec, but negligible prob and will
+            # create false positives.
+            return False
+        if c[x] == 2:
+            equal_out = x
+
+    if equal_out == -1:
+        return False
+
+    # ensure that the equal sized outputs have the
+    # same script type
+    matched_spk = None
+    for vo in tx.vout:
+        if vo.nValue == equal_out:
+            if not matched_spk:
+                matched_spk = btc.CCoinAddress.from_scriptPubKey(
+                    vo.scriptPubKey).get_scriptPubKey_type()
+            else:
+                if not btc.CCoinAddress.from_scriptPubKey(
+                    vo.scriptPubKey).get_scriptPubKey_type() == matched_spk:
+                    return False
+    assert matched_spk
+    return True

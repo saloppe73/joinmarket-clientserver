@@ -314,7 +314,7 @@ def mktx(ins, outs, version=1, locktime=0):
 def make_shuffled_tx(ins, outs, version=1, locktime=0):
     """ Simple wrapper to ensure transaction
     inputs and outputs are randomly ordered.
-    Can possibly be replaced by BIP69 in future
+    NB: This mutates ordering of `ins` and `outs`.
     """
     random.shuffle(ins)
     random.shuffle(outs)
