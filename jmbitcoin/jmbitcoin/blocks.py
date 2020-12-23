@@ -9,10 +9,8 @@ from bitcointx.core import CBitcoinTransaction
 from bitcointx.core.serialize import VarIntSerializer, VarBytesSerializer
 
 def decode_varint(data):
-    print(VarIntSerializer.deserialize_partial(data))
     n, tail = VarIntSerializer.deserialize_partial(data)
     head = data[0: len(data) - len(tail)]
-    print("got head, len: ", head, len(head))
     return n, len(head)
 
 def get_transactions_in_block(block):

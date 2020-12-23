@@ -126,33 +126,36 @@ def main():
     amt_required = originating_tx.vout[output_index].nValue + fee_est
     
     prop_utxo_dict = wallet_service.select_utxos(options.mixdepth,
-                            amt_required,select_fn=select_one_utxo)
-    prop_utxo = list(prop_utxo_dict)[0]
-    prop_utxo_val = prop_utxo_dict[prop_utxo]
+                            amt_required)
+    prop_utxos = list(prop_utxo_dict)
+    prop_utxo_vals = [prop_utxo_dict[x] for x in prop_utxos]
     # get the private key for that utxo
     priv = wallet_service.get_key_from_addr(
-        wallet_service.script_to_addr(prop_utxo_val['script']))
+        wallet_service.script_to_addr(prop_utxo_vals[0]['script']))
     # construct the arguments for the snicker proposal:
-    our_input_utxo = btc.CMutableTxOut(prop_utxo_val['value'],
-                                       prop_utxo_val['script'])
+    our_input_utxos = [btc.CMutableTxOut(x['value'],
+                        x['script']) for x in prop_utxo_vals]
 
+    # destination must be a different mixdepth:
+    prop_destn_spk = wallet_service.get_new_script((
+        options.mixdepth + 1) % (wallet_service.mixdepth + 1), 1)
     change_spk = wallet_service.get_new_script(options.mixdepth, 1)
     their_input = (txid1, output_index)
     # we also need to extract the pubkey of the chosen input from
     # the witness; we vary this depending on our wallet type:
     pubkey, msg = btc.extract_pubkey_from_witness(originating_tx, input_index)
-    if not msg:
-        jmprint("Failed to extract pubkey from transaction: " + msg, "error")
+    if not pubkey:
+        log.error("Failed to extract pubkey from transaction: {}".format(msg))
         sys.exit(EXIT_FAILURE)
     encrypted_proposal = wallet_service.create_snicker_proposal(
-            prop_utxo, their_input,
-            our_input_utxo,
+            prop_utxos, their_input,
+            our_input_utxos,
             originating_tx.vout[output_index],
             net_transfer,
             fee_est,
             priv,
             pubkey.format(),
-            prop_utxo_val['script'],
+            prop_destn_spk,
             change_spk,
             version_byte=1) + b"," + bintohex(pubkey.format()).encode('utf-8')
 

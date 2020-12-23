@@ -174,6 +174,12 @@ def main():
                               outputs,
                               version=2,
                               locktime=0)
+    # before signing, check we satisfied the criteria, otherwise
+    # this is pointless!
+    if not btc.is_snicker_tx(tx):
+        log.error("Code error, created non-SNICKER tx, not signing.")
+        sys.exit(EXIT_FAILURE)
+
     # sign all inputs
     # scripts: {input_index: (output_script, amount)}
     our_inputs = {}

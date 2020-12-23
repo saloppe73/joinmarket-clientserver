@@ -108,7 +108,7 @@ def is_snicker_v1_tx(tx):
     * 2 equal outputs, same script type, pubkey hash variant.
     * 1 other output (0 is negligible probability hence ignored - if it
       was included it would create a lot of false positives).
-    * Exactly 2 inputs, same script type, pubkey hash variant.
+    * >=2 inputs, same script type, pubkey hash variant.
     * Input sequence numbers are both 0xffffffff
     * nVersion 2
     * nLockTime 0
@@ -119,7 +119,7 @@ def is_snicker_v1_tx(tx):
         return False
     if tx.nLockTime != 0:
         return False
-    if len(tx.vin) != 2:
+    if len(tx.vin) < 2:
         return False
     if len(tx.vout) != 3:
         return False

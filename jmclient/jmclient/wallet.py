@@ -5,6 +5,7 @@ import functools
 import collections
 import numbers
 import random
+import copy
 import base64
 import json
 from binascii import hexlify, unhexlify
@@ -1303,16 +1304,16 @@ class SNICKERWalletMixin(object):
             return False, "Failed to import private key."
         return True, None
 
-    def create_snicker_proposal(self, our_input, their_input, our_input_utxo,
+    def create_snicker_proposal(self, our_inputs, their_input, our_input_utxos,
                                 their_input_utxo, net_transfer, network_fee,
                                 our_priv, their_pub, our_spk, change_spk,
                                 encrypted=True, version_byte=1):
         """ Creates a SNICKER proposal from the given transaction data.
         This only applies to existing specification, i.e. SNICKER v 00 or 01.
         This is only to be used for Joinmarket and only segwit wallets.
-        `our_input`, `their_input` - utxo format used in JM wallets,
+        `our_inputs`, `their_input` - utxo format used in JM wallets (first is list),
         keyed by (tixd, n), as dicts (currently of single entry).
-        `our_input_utxo`, `their..` - type CTxOut (contains value, scriptPubKey)
+        `our_input_utxos`, `their..` - type CTxOut (contains value, scriptPubKey)
         net_transfer - amount, after bitcoin transaction fee, transferred from
         Proposer (our) to Receiver (their). May be negative.
         network_fee - total bitcoin network transaction fee to be paid (so estimates
@@ -1321,7 +1322,7 @@ class SNICKERWalletMixin(object):
         the tweak as per the BIP. Note `their_pub` may or may not be associated with
         the input of the receiver, so is specified here separately. Note also that
         according to the BIP the privkey we use *must* be the one corresponding to
-        the input we provided, else (properly coded) Receivers will reject our
+        the first input we provided, else (properly coded) Receivers will reject our
         proposal.
         `our_spk` - a scriptPubKey for the Proposer coinjoin output
         `change_spk` - a change scriptPubkey for the proposer as per BIP
@@ -1338,17 +1339,19 @@ class SNICKERWalletMixin(object):
         assert isinstance(self, PSBTWalletMixin)
         # before constructing the bitcoin transaction we must calculate the output
         # amounts
-        # TODO investigate arithmetic for negative transfer
-        if our_input_utxo.nValue - their_input_utxo.nValue - network_fee <= 0:
+        # find our total input value:
+        our_input_val = sum([x.nValue for x in our_input_utxos])
+        if our_input_val - their_input_utxo.nValue - network_fee <= 0:
             raise Exception(
                 "Cannot create SNICKER proposal, Proposer input too small")
         # we must also use ecdh to calculate the output scriptpubkey for the
         # receiver
         # First, check that `our_priv` corresponds to scriptPubKey in
-        # `our_input_utxo` to prevent callers from making useless proposals.
+        # first entry in `our_input_utxos` to prevent callers from making
+        # useless proposals.
         expected_pub = btc.privkey_to_pubkey(our_priv)
         expected_spk = self.pubkey_to_script(expected_pub)
-        assert our_input_utxo.scriptPubKey == expected_spk
+        assert our_input_utxos[0].scriptPubKey == expected_spk
         # now we create the ecdh based tweak:
         tweak_bytes = btc.ecdh(our_priv[:-1], their_pub)
         tweaked_pub = btc.snicker_pubkey_tweak(their_pub, tweak_bytes)
@@ -1363,7 +1366,7 @@ class SNICKERWalletMixin(object):
         tweaked_addr, our_addr, change_addr = [str(
             btc.CCoinAddress.from_scriptPubKey(x)) for x in (
                 tweaked_spk, expected_spk, change_spk)]
-        outputs = btc.construct_snicker_outputs(our_input_utxo.nValue,
+        outputs = btc.construct_snicker_outputs(our_input_val,
                                                 their_input_utxo.nValue,
                                                 tweaked_addr,
                                                 our_addr,
@@ -1375,26 +1378,28 @@ class SNICKERWalletMixin(object):
         # version and locktime as currently specified in the BIP
         # for 0/1 version SNICKER. (Note the locktime is partly because
         # of expected delays).
-        tx = btc.make_shuffled_tx([our_input, their_input], outputs,
+        # We do not use `make_shuffled_tx` because we need a specific order
+        # on the input side: the receiver's is placed randomly, but the first
+        # *of ours* is the one used for ECDH.
+        all_inputs = copy.deepcopy(our_inputs)
+        insertion_index = random.randrange(len(all_inputs)+1)
+        all_inputs.insert(insertion_index, their_input)
+        all_input_utxos = copy.deepcopy(our_input_utxos)
+        all_input_utxos.insert(insertion_index, their_input_utxo)
+        # for outputs, we must shuffle as normal:
+        random.shuffle(outputs)
+        tx = btc.mktx(all_inputs, outputs,
                               version=2, locktime=0)
-        # we need to know which randomized input is ours:
-        our_index = -1
-        for i, inp in enumerate(tx.vin):
-            if our_input == (inp.prevout.hash[::-1], inp.prevout.n):
-                our_index = i
-        assert our_index in [0, 1], "code error: our input not in tx"
-        spent_outs = [our_input_utxo, their_input_utxo]
-        if our_index == 1:
-            spent_outs = spent_outs[::-1]
         # create the psbt and then sign our input.
-        snicker_psbt = self.create_psbt_from_tx(tx, spent_outs=spent_outs)
+        snicker_psbt = self.create_psbt_from_tx(tx,
+                                    spent_outs=all_input_utxos)
         # having created the PSBT, sign our input
         signed_psbt_and_signresult, err = self.sign_psbt(
         snicker_psbt.serialize(), with_sign_result=True)
         assert err is None
         signresult, partially_signed_psbt = signed_psbt_and_signresult
-        assert signresult.num_inputs_signed == 1
-        assert signresult.num_inputs_final == 1
+        assert signresult.num_inputs_signed == len(our_inputs)
+        assert signresult.num_inputs_final == len(our_inputs)
         assert not signresult.is_final
         snicker_serialized_message = btc.SNICKER_MAGIC_BYTES + bytes(
             [version_byte]) + btc.SNICKER_FLAG_NONE + tweak_bytes + \
@@ -1481,16 +1486,16 @@ class SNICKERWalletMixin(object):
         # which populates the 'is_signed' info fields for us. Note that
         # we do not use the PSBTWalletMixin.sign_psbt() which automatically
         # signs with our keys.
-        if not len(utx.vin) == 2:
-            return None, "PSBT proposal does not contain 2 inputs."
+        if len(utx.vin) < 2:
+            return None, "PSBT proposal does not contain at least 2 inputs."
         testsignresult = cpsbt.sign(btc.KeyStore(), finalize=False)
 
         # Note: "num_inputs_signed" refers to how many *we* signed,
         # which is obviously none here as we provided no keys.
         if not (testsignresult.num_inputs_signed == 0 and \
-                testsignresult.num_inputs_final == 1 and \
+                testsignresult.num_inputs_final == len(utx.vin)-1 and \
                 not testsignresult.is_final):
-            return None, "PSBT proposal does not contain 1 signature."
+            return None, "PSBT proposal is not fully signed by proposer."
 
         # Validate that we own one SNICKER style output:
         spk = btc.verify_snicker_output(utx, our_pub, tweak_bytes)
@@ -1540,7 +1545,7 @@ class SNICKERWalletMixin(object):
             return None, "Unable to sign proposed PSBT, reason: " + err
         signresult, signed_psbt = signresult_and_signedpsbt
         assert signresult.num_inputs_signed == 1
-        assert signresult.num_inputs_final == 2
+        assert signresult.num_inputs_final == len(utx.vin)
         assert signresult.is_final
         # we now know the transaction is valid and fully signed; return to caller,
         # along with supporting data for this tx:

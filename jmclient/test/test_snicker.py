@@ -91,8 +91,8 @@ def test_snicker_e2e(setup_snicker, nw, wallet_structures,
         # not just one guessed output, if desired.
         encrypted_proposals.append(
             wallet_p.create_snicker_proposal(
-            our_input, their_input,
-            our_input_utxo,
+            [our_input], their_input,
+            [our_input_utxo],
             tx.vout[txid1_index],
             net_transfer,
             fee_est,

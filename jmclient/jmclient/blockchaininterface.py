@@ -206,10 +206,12 @@ class BitcoinCoreInterface(BlockchainInterface):
         restart when the connection is healed, but that is tricky).
         Should not be called directly from outside code.
         """
+        # TODO: flip the logic of this. We almost never want to print these
+        # out even to debug as they are noisy.
         if method not in ['importaddress', 'walletpassphrase', 'getaccount',
                           'gettransaction', 'getrawtransaction', 'gettxout',
                           'importmulti', 'listtransactions', 'getblockcount',
-                          'scantxoutset']:
+                          'scantxoutset', 'getblock', 'getblockhash']:
             log.debug('rpc: ' + method + " " + str(args))
         try:
             res = self.jsonRpc.call(method, args)
