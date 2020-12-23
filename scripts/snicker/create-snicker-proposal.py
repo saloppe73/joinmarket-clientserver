@@ -56,16 +56,7 @@ def main():
         type='int',
         dest='gaplimit',
         default = 6,
-        help='Only to be used with -w; gap limit for Joinmarket wallet, default 6.'
-    )
-    parser.add_option(
-        '-M',
-        '--max-mixdepth',
-        action='store',
-        type='int',
-        dest='maxmixdepth',
-        default=5,
-        help='Only to be used with -w; number of mixdepths for wallet, default 5.'
+        help='gap limit for Joinmarket wallet, default 6.'
     )
     parser.add_option(
         '-n',

@@ -104,6 +104,7 @@ class SNICKERReceiver(Service):
     def log_successful_tx(self, tx):
         """ TODO: add dedicated SNICKER log file.
         """
+        self.successful_txs.append(tx)
         jlog.info(btc.human_readable_transaction(tx))
 
     def process_proposals(self, proposals):

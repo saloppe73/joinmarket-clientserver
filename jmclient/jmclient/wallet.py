@@ -1342,11 +1342,6 @@ class SNICKERWalletMixin(object):
         if our_input_utxo.nValue - their_input_utxo.nValue - network_fee <= 0:
             raise Exception(
                 "Cannot create SNICKER proposal, Proposer input too small")
-        total_input_amount = our_input_utxo.nValue + their_input_utxo.nValue
-        total_output_amount = total_input_amount - network_fee
-        receiver_output_amount = their_input_utxo.nValue + net_transfer
-        proposer_output_amount = total_output_amount - receiver_output_amount
-
         # we must also use ecdh to calculate the output scriptpubkey for the
         # receiver
         # First, check that `our_priv` corresponds to scriptPubKey in
@@ -1368,11 +1363,13 @@ class SNICKERWalletMixin(object):
         tweaked_addr, our_addr, change_addr = [str(
             btc.CCoinAddress.from_scriptPubKey(x)) for x in (
                 tweaked_spk, expected_spk, change_spk)]
-        # now we must construct the three outputs with correct output amounts.
-        outputs = [{"address": tweaked_addr, "value": receiver_output_amount}]
-        outputs.append({"address": our_addr, "value": receiver_output_amount})
-        outputs.append({"address": change_addr,
-                "value": total_output_amount - 2 * receiver_output_amount})
+        outputs = btc.construct_snicker_outputs(our_input_utxo.nValue,
+                                                their_input_utxo.nValue,
+                                                tweaked_addr,
+                                                our_addr,
+                                                change_addr,
+                                                network_fee,
+                                                net_transfer)
         assert all([x["value"] > 0 for x in outputs])
 
         # version and locktime as currently specified in the BIP

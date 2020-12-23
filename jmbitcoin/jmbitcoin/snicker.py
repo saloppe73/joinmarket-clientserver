@@ -61,6 +61,39 @@ def verify_snicker_output(tx, pub, tweak, spk_type="p2wpkh"):
         return -1, None
     return found_index, expected_destination_spk
 
+def construct_snicker_outputs(proposer_input_amount, receiver_input_amount,
+                              receiver_addr, proposer_addr, change_addr,
+                              network_fee, net_transfer):
+    """ This is abstracted from full SNICKER transaction proposal (see
+    `jmclient.wallet.SNICKERWalletMixin`) construction, as it is also useful
+    for making fake SNICKERs.
+    total_input_amount (int) : value of sum of inputs in sats
+    receiver_input_amount (int): value of single utxo input of receiver in sats
+    receiver_addr (str): address for tweaked destination of receiver
+    proposer_addr (str): address for proposer's coinjoin output
+    change_addr (str): address for proposer's change output
+    network_fee (int): bitcoin network transaction fee in sats
+    net_transfer (int): how much the proposer gives to the receiver in sats
+
+    Returns:
+    list of outputs, each is of form {"address": x, "value": y}
+    """
+    total_input_amount = proposer_input_amount + receiver_input_amount
+    total_output_amount = total_input_amount - network_fee
+    receiver_output_amount = receiver_input_amount + net_transfer
+    proposer_output_amount = total_output_amount - receiver_output_amount
+    change_output_amount = total_output_amount - 2 * receiver_output_amount
+    # callers should only request sane values:
+    assert all([x>0 for x in [receiver_output_amount, change_output_amount]])
+
+    # now we must construct the three outputs with correct output amounts.
+    outputs = [{"address": receiver_addr, "value": receiver_output_amount}]
+    outputs.append({"address": proposer_addr, "value": receiver_output_amount})
+    outputs.append({"address": change_addr,
+                    "value": change_output_amount})
+
+    return outputs
+
 def is_snicker_tx(tx, snicker_version=bytes([1])):
     """ Returns True if the CTransaction object `tx`
     fits the pattern of a SNICKER coinjoin of type
