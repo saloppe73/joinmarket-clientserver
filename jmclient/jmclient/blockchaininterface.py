@@ -410,6 +410,17 @@ class BitcoinCoreInterface(BlockchainInterface):
                 result.append(result_dict)
         return result
 
+    def get_unspent_indices(self, transaction):
+        """ Given a CTransaction object, identify the list of
+        indices of outputs which are unspent (returned as list of ints).
+        """
+        bintxid = transaction.GetTxid()[::-1]
+        res = self.query_utxo_set([(bintxid, i) for i in range(
+            len(transaction.vout))])
+        # QUS returns 'None' for spent outputs, so filter them out
+        # and return the indices of the others:
+        return [i for i, val in enumerate(res) if val]
+
     def estimate_fee_per_kb(self, N):
         """ The argument N may be either a number of blocks target,
         for estimation of feerate by Core, or a number of satoshis

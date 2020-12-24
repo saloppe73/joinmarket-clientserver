@@ -367,3 +367,51 @@ def extract_pubkey_from_witness(tx, i):
         if not is_valid_pubkey(sWitness[1], True):
             return None, "invalid pubkey in witness"
         return secp256k1.PublicKey(sWitness[1]), "success"
+
+
+def is_jm_tx(tx, min_cj_amount=75000, min_participants=3):
+    """ Identify Joinmarket-patterned transactions.
+    TODO: this should be in another module.
+    Given a CBitcoinTransaction tx, check:
+    nins >= number of coinjoin outs (equal sized)
+    non-equal outs = coinjoin outs or coinjoin outs -1
+    at least 3 coinjoin outs (2 technically possible but excluded)
+    also possible to try to get clever about fees, but won't bother.
+    note: BlockSci's algo additionally addresses subset sum, so will
+    give better quality data, but this is kept simple for now.
+    We filter out joins with less than 3 participants as they are
+    not really in Joinmarket "correct usage" and there will be a lot
+    of false positives.
+    We filter out "joins" less than 75000 sats as they are unlikely to
+    be Joinmarket and there tend to be many low-value false positives.
+    Returns:
+    (False, None) for non-matches
+    (coinjoin amount, number of participants) for matches.
+    """
+    def assumed_cj_out_num(nout):
+        """Return the value ceil(nout/2)
+        """
+        x = nout//2
+        if nout %2: return x+1
+        return x
+
+    def most_common_value(x):
+        return max(set(x), key=x.count)
+
+    assumed_coinjoin_outs = assumed_cj_out_num(len(tx.vout))
+    if assumed_coinjoin_outs < min_participants:
+        return (False, None)
+    if len(tx.vin) < assumed_coinjoin_outs:
+        return (False, None)
+    outvals = [x.nValue for x in tx.vout]
+    # it's not possible for the coinjoin out to not be
+    # the most common value:
+    mcov = most_common_value(outvals)
+    if mcov < min_cj_amount:
+        return (False, None)
+    cjoutvals = [x for x in outvals if x == mcov]
+    if len(cjoutvals) != assumed_coinjoin_outs:
+        return (False, None)
+    # number of participants is the number of assumed
+    # coinjoin outputs:
+    return (mcov, assumed_coinjoin_outs)
