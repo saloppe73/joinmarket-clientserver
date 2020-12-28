@@ -130,7 +130,6 @@ def main():
     receiver_utxo_val = utxo_dict[receiver_utxo]
     # gather the other utxos into a list to select from:
     nonreceiver_utxos = [sorted_utxos[0]] + sorted_utxos[2:]
-
     # get the net transfer in our fake coinjoin:
     if options.net_transfer < -1000001:
         log.error("Net transfer must be greater than negative 1M sats")
@@ -147,8 +146,9 @@ def main():
         available = [{'utxo': utxo, 'value': utxo_dict[utxo]["value"]}
                      for utxo in nonreceiver_utxos]
         # selection algos return [{"utxo":..,"value":..}]:
-        prop_utxos = [x["utxo"] for x in select_greedy(available,
-        receiver_utxo_val["value"] + fee_est + options.net_transfer + 1000)]
+        prop_utxos = {x["utxo"] for x in select_greedy(available,
+        receiver_utxo_val["value"] + fee_est + options.net_transfer + 1000)}
+        prop_utxos = list(prop_utxos)
         prop_utxo_vals = [utxo_dict[prop_utxo] for prop_utxo in prop_utxos]
     except NotEnoughFundsException as e:
         log.error(repr(e))

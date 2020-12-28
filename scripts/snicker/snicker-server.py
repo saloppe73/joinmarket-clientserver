@@ -89,7 +89,7 @@ class SNICKERServer(Resource):
         log.debug("GET request, path: {}".format(request.path))
         if request.path == b"/target":
             return self.serve_pow_target(request)
-        if request.path != "/":
+        if request.path != b"/":
             return self.return_error(request, "Invalid request path",
                                      "invalid-request-path")
         proposals = self.get_all_current_proposals()
@@ -186,10 +186,16 @@ class SNICKERServer(Resource):
             return []
         return list([x[0] for x in rows])
 
+    @classmethod
+    def db_row_to_proposal_string(cls, row):
+        assert len(row) == 2
+        key, proposal = row
+        return proposal + "," + key
+
     def get_all_current_proposals(self):
         rows = self.dbquery('SELECT * from {};'.format(
             database_table_name), (), True)
-        return rows
+        return "\n".join([self.db_row_to_proposal_string(x) for x in rows])
 
     def get_proposals_for_key(self, key):
         rows = self.dbquery('SELECT proposal FROM {} WHERE pubkey=?'.format(
