@@ -2,7 +2,14 @@
 
 Current pull request/branch [here](https://github.com/JoinMarket-Org/joinmarket-clientserver/pull/768).
 
-Instructions here are very subject to change. This was written from commit https://github.com/JoinMarket-Org/joinmarket-clientserver/pull/768/commits/b545986cb5df1798dc71b91cdaa2a917638bbd5c
+Instructions here are very subject to change. This was written from commit https://github.com/JoinMarket-Org/joinmarket-clientserver/pull/768/commits/bca004ccbec01bd7b6a2b39b18fefd767c071237
+
+The main user-facing body of what is created here is to be found in the directory `scripts/snicker`, consisting of scripts:
+* `snicker-seed-tx.py` - create a fake SNICKER transaction in your own wallet
+* `snicker-finder.py` - scan recent blocks for Joinmarket or SNICKER candidate transactions
+* `create-encrypted-proposal.py` - takes transactions found from the above and makes proposals, uploading them to a server
+* `snicker-server.py` - implements a simple server serving over *.onion, with a sqlite database to store proposals, and defends against spam only mildly with a proof of work requirement (see below)
+* `receive-snicker.py` - polls above server to read new proposals, parse them and broadcasts completed SNICKER coinjoins when found, storing the new keys as imports (see details on wallet handling below).
 
 #### Quick review of SNICKER functionality
 
@@ -10,8 +17,22 @@ For formal specs as currently implemented, please use [this](https://gist.github
 
 Essentially, this is a two party but non-interactive protocol. The **proposer** will identify a candidate transaction where he has some confidence that one or more inputs are owned by the same party as one output, and that that party has SNICKER receiver functionality.
 Given those conditions, he'll create one or more **proposals** which are of form `base64-encoded-ECIES-encrypted-PSBT,hex-encoded-pubkey` (the separator is literally a comma; this is ASCII encoded), and send them to a **snicker-server** which is hosted at an onion address (possibly TLS but let's stick with onion for now, it's easier). (They could also be sent manually.)
-The **snicker-server** just hosts the proposals and lets others read them. For the purpose of testing it's fine that we don't have a good implementation of this, just a bare-bones version that stores them in a file and lets others access.
-The **receiver** then polls this server (for testing, make the polling loop fast; in real usage it should be slow), reads all the existing proposals using a `GET` request with no arguments, and if it can decrypt and sanity check the transaction OK, it co-signs it and broadcasts it. Note: *the receiver wallet will store its new coins output from the coinjoin, as imported keys; they are not part of the HD tree, although derivable from history*.
+
+##### Proof of work for mild anti-spam
+
+As implemented here, in fact, the proposer attaches a proof of work in the form of a 10-byte nonce appended to the end of the above string (hex encoded; so in fact: `base64-encoded-ECIES-encrypted-PSBT,hex-encoded-pubkey,hex-encoded-nonce` is what is sent over the wire). This nonce is grinded to get a 32-byte-truncated-hash512 of that string to be less than a target calculated by a request number of bits from the server. The target bits is requested by the proposer with a `GET /target` request to the server, before sending the proposals themselves with a `POST /` request with the proposals in the body. For the proof of work, see `jmbase/jmbase/proof_of_work.py`; it's pretty elementary. Note of course this is no defence against a serious attempt to jam the system, it's only a "script-kiddie-defence", so to speak.
+
+##### Servers
+
+The **snicker-server** just hosts the proposals and lets others read them. For the purpose of testing it's fine that we don't have a very sophisticated version of this, but for now note:
+* Serves only over a Tor hidden service
+* Stores the accepted proposals in a sqlite3 database `proposals.db`. The table is `proposals` and has only two fields: `pubkey` and `proposal` (see above).
+* Defends against spam with proof of work as per above (this is very limited but better than nothing)
+* Currently has NO maintenance feature such as flushing out proposals after a time limit. This seems the most obvious way to improve what exists, here.
+
+##### Receiver side actions.
+
+The **receiver** then polls this server (for testing, make the polling loop fast; in real usage it should be slow), reads all the existing proposals using a `GET /` request with no parameters, and if it can decrypt and sanity check the transaction OK, it co-signs it and broadcasts it. Note: *the receiver wallet will store its new coins output from the coinjoin, as imported keys; they are not part of the HD tree, although derivable from history*. See `use of wallets` below for important notes on this aspect.
 
 #### Choice of network
 
@@ -25,15 +46,17 @@ Mainnet isn't recommended now, for obvious reasons (including that it's a bit to
 
 ** Wallet type** - please stick with native segwit (`native=true` in config *before* you generate), but you can also choose p2sh-p2wpkh, it should work. No other script type (including p2pkh) will work here. We don't want mixed script type SNICKER coinjoins.
 
-**Persistence** - this is very important and not at all obvious! But, on regtest by default (and I think testnet? check), we use hex seeds instead of wallet files and `VolatileStorage` (wallet storage in memory; wiped on shutdown). This is fine and convenient for many tests, but will not work for a key part of SNICKER - imported keys.
+**Persistence in the wallet** - this is very important and not at all obvious! But, on regtest by default (and I think testnet? check), we use hex seeds instead of wallet files and `VolatileStorage` (wallet storage in memory; wiped on shutdown). This is fine and convenient for many tests, but will not work for a key part of SNICKER - imported keys.
 The upshot - **make sure you actually generate wallet files for all wallets you're going to test SNICKER with**, otherwise you will not even see the created coins on the receiver side.
-Additionally, when you view the wallet with wallet-tool, you need to use `--recoversync`, as the default fast sync won't see imported keys.
+Additionally, when you view the wallet with wallet-tool, you need to use `--recoversync`, as the default fast sync won't see imported keys. If you took these two steps, your tests should correctly show the post-SNICKER created coins.
 
 #### A possible test workflow
 
 Generate a minimum of two joinmarket wallets with `python wallet-tool.py generate`, as noted above, native (or at least, both the same type).
 
-Fund them both. They won't need more than one funding utxo to start with.
+Fund them both. The receiver needs at least two utxos to create the seed transaction.
+
+Create a seed fake-SNICKER transaction in the receiver wallet, using the script `snicker-seed-tx.py`.
 
 Start the test server. Navigate to `scripts/snicker` and run `python snicker-server.py` - no arguments should be needed, and this will generate an onion running serving on port 80; the onion hostname is displayed:
 
@@ -45,7 +68,7 @@ Your hidden service is available:
 xpkqk2cy2h2ay5iecwcod5ka36nxj2tsiyczk2w5c6o7h5g57w3xg4id.onion
 ```
 
-This is ephemeral, obviously we intend these servers to be long-running later. For now, add that onion **including an http prefix** here:
+This is ephemeral, obviously we intend the real servers to be long-running. For now, add that onion **including an http prefix** here:
 
 ```
 
@@ -57,50 +80,55 @@ servers= http://xpkqk2cy2h2ay5iecwcod5ka36nxj2tsiyczk2w5c6o7h5g57w3xg4id.onion,
 
 `servers=` there is a comma separated list, and for now (until bugfixed) you need to include `http://`.
 
-You're now ready to do the two steps: (a) create a proposal and upload it, (b) download proposals and complete coinjoins. It could be different people doing (a) and (b) of course but here we're assuming one tester doing everything (see two wallets above).
+You're now ready to do the two steps: (a) create a proposal and upload it, (b) download proposals (as the receiver identity/wallet) and complete coinjoins. It could be different people doing (a) and (b) of course but here we're assuming one tester doing everything (see two wallets above).
 
 ##### Creating one or more proposals
 
-First you need a candidate. Scanning the blockchain or other data to find candidate transactions is functionality that is not (yet?) included in this Joinmarket code), but for testing we can create something ourselves.
-Assuming (wallet1.jmdat : **proposer wallet**, wallet2.jmdat: **receiver wallet**):
-Create a transaction in wallet2.jmdat, e.g.:
+Having done the above seed transaction, do a scan operation to find the candidate:
+
+``` cd script/snicker; python snicker-finder.py --datadir=. 330`
+
+Here, 330 is the starting block number on my regtest blockchain; the ending block is the current block. It will look for all transactions with a SNICKER pattern and you should see returned:
 
 ```
-python sendpayment.py --datadir=. -N0 -m0 wallet2.jmdat 0.26 bcrt1qwxcf47avvgzxyu39cy8n4r22qaynvn7mc359ap
+2020-12-28 16:09:04,329 [INFO]  Finished processing block: 790
+2020-12-28 16:09:04,334 [INFO]  Found SNICKER transaction: 32f80807b3ba4ca477b25e8ab608a8a3134a34c8c3787cad95c653d1805d7533 in block: 791
+2020-12-28 16:09:04,338 [INFO]  Finished processing block: 791
+2020-12-28 16:09:04,340 [INFO]  Finished processing block: 792
+done
 ```
-
-The console output will include e.g. : 
+.. or similar. Then look in `./candidates.txt` to find the details of the identified transaction, including its full hex, which you need to copy:
 ```
 2020-12-16 11:13:01,708 [INFO]  {
     "hex": "0200000000010138e8a90b3df7740b9d5f5ae9af2cf6769f314d290b2e12bf25bfa4aae2c0cbe20000000000feffffff0280ba8c010000000016001471b09afbac6204627225c10f3a8d4a0749364fdb6d7c36220000000016001447ae59f32c504cbb56e18b77f7842fb58b55025b02473044022075354351ad4c619ba662f9abd25e8ee434f8381795001606a29fa959d36aeb7f022018f8bf1ec0407dad586baeb7e4d977aaacbd8fb15579293e6d739ad69ac3c6cf012103f8e827464fb83209c194376c53ae8f4e7ab5f1baf0948705fec6dd421f2b65c37a020000",
     "inputs": [
         .................
+Full transaction hex for creating a proposal is found in the above.
+The unspent indices are: 0 1 2
 ```
 
-Copy that fully signed transaction hex (after broadcasting the transaction, of course).
+Copy that fully signed transaction hex, and note the unspent outputs. You're going to assume (in this case correctly of course) that all of the inputs are valid options for the SNICKER public key.
 
-In the outputs section of the above transaction (as shown in the console), check the output index of the output you want to do the SNICKER with.
-Then, using first wallet `wallet1.jmdat` you can run the `create-proposals.py` script from `scripts/snicker`:
+At this point you're ready to run the proposal creator:
 
 ```
-python create-snicker-proposal.py --datadir=. wallet1.jmdat -m0 "0200000000010138e8a90b3df7740b9d5f5ae9af2cf6769f314d290b2e12bf25bfa4aae2c0cbe20000000000feffffff0280ba8c010000000016001471b09afbac6204627225c10f3a8d4a0749364fdb6d7c36220000000016001447ae59f32c504cbb56e18b77f7842fb58b55025b02473044022075354351ad4c619ba662f9abd25e8ee434f8381795001606a29fa959d36aeb7f022018f8bf1ec0407dad586baeb7e4d977aaacbd8fb15579293e6d739ad69ac3c6cf012103f8e827464fb83209c194376c53ae8f4e7ab5f1baf0948705fec6dd421f2b65c37a020000" 0 0 100
+python create-encrypted-proposal.py --datadir=. proposerwallet.jmdat "0200000000010138e8a90b3df7740b9d5f5ae9af2cf6769f314d290b2e12bf25bfa4aae2c0cbe20000000000feffffff0280ba8c010000000016001471b09afbac6204627225c10f3a8d4a0749364fdb6d7c36220000000016001447ae59f32c504cbb56e18b77f7842fb58b55025b02473044022075354351ad4c619ba662f9abd25e8ee434f8381795001606a29fa959d36aeb7f022018f8bf1ec0407dad586baeb7e4d977aaacbd8fb15579293e6d739ad69ac3c6cf012103f8e827464fb83209c194376c53ae8f4e7ab5f1baf0948705fec6dd421f2b65c37a020000" 0 1 100 -m1
 ```
-
-Here, the last three arguments are (input index), (output index) and (sats to pay to the receiver). The former can be zero always if the initial transaction is *not* a coinjoin (indeed, in our case, there was only 1 input, so it was easy), the second is the output index that you recorded above (it's the index of the output that we are asking the receiver to spend), and the last you can choose whatever you like, including negative integers.
+Obviously see the `--help` for details, but in this example we chose input index 0 to source the pubkey for the encryption, output index 1 for the coin we want the receiver to spend with us in the coinjoin, 100 sats as the amount we will bump their output by as an incentive to do the coinjoin (you *can* make this number negative, to receive, instead - the proposer is paying the tx fee otherwise, note), and mixdepth 1 as the mixdepth from which we source *our* coins for the coinjoin. Make sure of course that mixdepth 1 has at least a little bit more bitcoin than the size of that output at index 1 aforementioned.
 
 *Current bug* : when you run the above, assuming it connects the server OK, you will see:
 
 ```
 Response from server: http://xpkqk2cy2h2ay5iecwcod5ka36nxj2tsiyczk2w5c6o7h5g57w3xg4id.onion was: proposals-accepted
 ```
-... but it will hang and not quit. Just Ctrl-C to quit until that bug is fixed (the "proposals-accepted" at least tells you that the proposal was recorded).
+... but it will hang and not quit. Just Ctrl-C to quit until that bug is fixed (the "proposals-accepted" tells you that the proposal was recorded).
 
 ##### Receiving the created proposals.
 
-The last phase is pretty simple, if it works, just run the receiver script (from `scripts/snicker`) as follows:
+The last phase is pretty simple, if it works - just run the receiver script (from `scripts/snicker`) as follows:
 
 ```
-python receive-snicker.py --datadir=. wallet2.jmdat
+python receive-snicker.py --datadir=. receiver.jmdat
 User data location: .
 2020-12-16 11:43:03,779 [DEBUG]  rpc: getblockchaininfo []
 2020-12-16 11:43:03,781 [DEBUG]  rpc: getnewaddress []
@@ -129,7 +157,7 @@ Obviously this is the ideal case: if no errors occur. If invalid proposals, or p
 
 ### What kind of testing is useful?
 
-Pretty much anything at this early stage. As well as testing, if others can help build out infrastructure for scanning blocks for candidates, especially *SNICKER* candidates (see the draft BIP mentioned at the start for the transaction format), and for making a more useful-in-the-real-world server script which does simple things like managing its database size and preventing crude DOS, that would be helpful.
+Pretty much anything at this early stage.
 
 ##### Appendix: Example output of SNICKER
 
