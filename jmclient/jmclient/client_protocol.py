@@ -104,19 +104,21 @@ class SNICKERClientProtocol(BaseClientProtocol):
     @commands.SNICKERProposerUp.responder
     def on_SNICKER_PROPOSER_UP(self):
         jlog.info("SNICKER proposer daemon ready.")
-        d = self.callRemote(commands.SNICKERProposerPostProposals,
-                            proposals="\n".join([x.decode(
-                            "utf-8") for x in self.client.get_proposals()]),
-                            server = self.servers[0])
-        for s in self.servers[1:]:
+        # TODO handle multiple servers correctly
+        for s in self.servers:
             if s == "":
                 continue
-            # TODO separate deferreds per call
-            d.addCallback(self.callRemote, commands.SNICKERProposerPostProposals,
-                                proposals="\n".join([x.decode(
-                                    "utf-8") for x in self.client.get_proposals()]),
-                                server = s)
-            d.addErrback(self.defaultErrback)
+            d = self.callRemote(commands.SNICKERRequestPowTarget,
+                                server=s)
+            self.defaultCallbacks(d)
+        return {"accepted": True}
+
+    @commands.SNICKERReceivePowTarget.responder
+    def on_SNICKER_RECEIVE_POW_TARGET(self, server, targetbits):
+        proposals = self.client.get_proposals(targetbits)
+        d = self.callRemote(commands.SNICKERProposerPostProposals,
+            proposals="\n".join([x.decode("utf-8") for x in proposals]),
+            server = server)
         self.defaultCallbacks(d)
         return {"accepted": True}
 
@@ -124,6 +126,7 @@ class SNICKERClientProtocol(BaseClientProtocol):
     def on_SNICKER_SERVER_ERROR(self, server, errorcode):
         self.client.info_callback("Server: " + str(
         server) + " returned error code: " + str(errorcode))
+        return {"accepted": True}
 
     @commands.SNICKERReceiverUp.responder
     def on_SNICKER_RECEIVER_UP(self):

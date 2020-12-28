@@ -131,12 +131,14 @@ class HTTPPassThrough(amp.AMP):
         destination_url = urlparse.urlunparse(url_parts)
         return (agent, destination_url)
 
-    def getRequest(self, server, success_callback, headers=None):
+    def getRequest(self, server, success_callback, url=None, headers=None):
         """ Make GET request to server server, if response received OK,
 	passed to success_callback, which must have function signature
         (response, server).
 	"""
         agent, destination_url = self.getAgentDestination(server)
+        if url:
+            destination_url = destination_url + url
         # Deliberately sending NO headers; this could be a tricky point
         # for anonymity of users, as much boilerplate code will not create
         # requests that look like this.
@@ -202,9 +204,9 @@ class SNICKERDaemonServerProtocol(HTTPPassThrough):
     def receive_proposals_response(self, response, server):
         d = readBody(response)
         if int(response.code) != 200:
-            log.warn("Server returned error code: " + str(response.code))
-            d = self.callRemote(SNICKERServerError(server=server,
-                                               errorcode=response.code))
+            log.msg("Server returned error code: " + str(response.code))
+            d = self.callRemote(SNICKERServerError, server=server,
+                                               errorcode=response.code)
             self.defaultCallbacks(d)
             return
         d.addCallback(self.process_proposals_response_from_server, server)
@@ -242,6 +244,22 @@ class SNICKERDaemonServerProtocol(HTTPPassThrough):
             return
         d = readBody(response)
         d.addCallback(self.process_proposals_from_server, server)
+
+    @SNICKERRequestPowTarget.responder
+    def on_SNICKER_REQUEST_POW_TARGET(self, server):
+        self.getRequest(server, self.receive_pow_target,
+                        url=b"/target")
+        return {"accepted": True}
+
+    def receive_pow_target(self, response, server):
+        d = readBody(response)
+        d.addCallback(self.process_pow_target, server)
+
+    def process_pow_target(self, response_body, server):
+        d = self.callRemote(SNICKERReceivePowTarget,
+                            server=server,
+                            targetbits=int(response_body.decode("utf-8")))
+        self.defaultCallbacks(d)
 
     def process_proposals_from_server(self, response, server):
         d = self.callRemote(SNICKERReceiverProposals,

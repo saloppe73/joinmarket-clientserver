@@ -24,7 +24,7 @@ output to stdout in the same string format: base64proposal,hexpubkey.
 import sys
 from optparse import OptionParser
 from jmbase import BytesProducer, bintohex, jmprint, hextobin, \
-     EXIT_ARGERROR, EXIT_FAILURE, EXIT_SUCCESS
+     EXIT_ARGERROR, EXIT_FAILURE, EXIT_SUCCESS, get_pow
 import jmbitcoin as btc
 from jmclient import (RegtestBitcoinCoreInterface, process_shutdown,
      jm_single, load_program_config, check_regtest, select_one_utxo,
@@ -158,10 +158,10 @@ def main():
             prop_destn_spk,
             change_spk,
             version_byte=1) + b"," + bintohex(pubkey.format()).encode('utf-8')
-
     if options.no_upload:
         jmprint(encrypted_proposal.decode("utf-8"))
         sys.exit(EXIT_SUCCESS)
+
     nodaemon = jm_single().config.getint("DAEMON", "no_daemon")
     daemon = True if nodaemon == 1 else False
     snicker_client = SNICKERPostingClient([encrypted_proposal])
@@ -173,9 +173,16 @@ def main():
                       daemon=daemon)
 
 class SNICKERPostingClient(object):
-    def __init__(self, proposals, info_callback=None,
+    """ A client object which stores proposals
+    ready to be sent to the server/servers, and appends
+    proof of work to them according to the server's rules.
+    """
+    def __init__(self, pre_nonce_proposals, info_callback=None,
                  end_requests_callback=None):
-        self.proposals = proposals
+        # the encrypted proposal without the nonce appended for PoW
+        self.pre_nonce_proposals = pre_nonce_proposals
+
+        self.proposals_with_nonce = []
 
         # callback for conveying information messages
         if not info_callback:
@@ -197,8 +204,19 @@ class SNICKERPostingClient(object):
     def default_info_callback(self, msg):
         jmprint(msg)
 
-    def get_proposals(self):
-        return self.proposals
+    def get_proposals(self, targetbits):
+        # the data sent to the server is base64encryptedtx,key,nonce; the nonce
+        # part is generated in get_pow().
+        for p in self.pre_nonce_proposals:
+            nonceval, preimage, niter = get_pow(p+b",", nbits=targetbits,
+                                                truncate=32)
+            log.debug("Got POW preimage: {}".format(preimage.decode("utf-8")))
+            if nonceval is None:
+                log.error("Failed to generate proof of work, message:{}".format(
+                    preimage))
+                sys.exit(EXIT_FAILURE)
+            self.proposals_with_nonce.append(preimage)
+        return self.proposals_with_nonce
 
 if __name__ == "__main__":
     main()

@@ -274,3 +274,10 @@ class SNICKERProposalsServerResponse(JMCommand):
 class SNICKERServerError(JMCommand):
     arguments = [(b'server', Unicode()),
                  (b'errorcode', Integer())]
+
+class SNICKERRequestPowTarget(JMCommand):
+    arguments = [(b'server', Unicode())]
+
+class SNICKERReceivePowTarget(JMCommand):
+    arguments = [(b'server', Unicode()),
+                 (b'targetbits', Integer())]
