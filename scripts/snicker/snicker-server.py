@@ -2,14 +2,31 @@
 
 """
 A rudimentary implementation of a server, allowing POST of proposals
-in base64 format, and GET of all current proposals, for SNICKER.
-Serves only over Tor hidden service.
+in base64 format, with POW attached required,
+and GET of all current proposals, for SNICKER.
+Serves only over Tor onion service.
+For persistent onion services, specify public port, local port and
+hidden service directory:
+
+`python snicker-server.py 80 7080 /my/hiddenservicedir`
+
+... and (a) make sure these settings match those in your Tor config,
+and also (b) note that the hidden service hostname may not be displayed
+if the running user, understandably, do not have permissions to read that
+directory.
+
+If you only want an ephemeral onion service, for testing, just run without
+arguments:
+
+`python snicker-server.py`
+
 """
 
 from twisted.internet import reactor
+from twisted.internet.defer import Deferred
 from twisted.web.server import Site
 from twisted.web.resource import Resource
-from twisted.internet.endpoints import TCP4ClientEndpoint, UNIXClientEndpoint
+from twisted.internet.endpoints import TCP4ClientEndpoint, UNIXClientEndpoint, serverFromString
 import txtorcon
 import sys
 import base64
@@ -206,10 +223,25 @@ class SNICKERServer(Resource):
 
 class SNICKERServerManager(object):
 
-    def __init__(self, port, uri_created_callback=None,
+    def __init__(self, port, local_port=None,
+                 hsdir=None,
+                 control_port=9051,
+                 uri_created_callback=None,
                  info_callback=None,
                  shutdown_callback=None):
+        # port is the *public* port, default 80
+        # if local_port is None, we follow the process
+        # to create an ephemeral hidden service.
+        # if local_port is a valid port, we start the
+        # hidden service configured at directory hsdir.
+        # In the latter case, note the patch described at
+        # https://github.com/meejah/txtorcon/issues/347 is required.
         self.port = port
+        self.local_port = local_port
+        if self.local_port is not None:
+            assert hsdir is not None
+            self.hsdir = hsdir
+            self.control_port = control_port
         if not uri_created_callback:
             self.uri_created_callback = self.default_info_callback
         else:
@@ -241,8 +273,14 @@ class SNICKERServerManager(object):
         process_shutdown()
 
     def create_onion_ep(self, t):
-        self.tor_connection = t
-        return t.create_onion_endpoint(self.port, version=3)
+        if self.local_port:
+            endpointString = "onion:{}:controlPort={}:localPort={}:hiddenServiceDir={}".format(
+                self.port, self.control_port,self.local_port, self.hsdir)
+            return serverFromString(reactor, endpointString)
+        else:
+            # ephemeral onion:
+            self.tor_connection = t
+            return t.create_onion_endpoint(self.port, version=3)
 
     def onion_listen(self, onion_ep):
         return onion_ep.listen(self.site)
@@ -262,15 +300,20 @@ class SNICKERServerManager(object):
         """ This function executes the workflow
         of starting the hidden service.
         """
-        control_host = jm_single().config.get("PAYJOIN", "tor_control_host")
-        control_port = int(jm_single().config.get("PAYJOIN", "tor_control_port"))
-        if str(control_host).startswith('unix:'):
-            control_endpoint = UNIXClientEndpoint(reactor, control_host[5:])
+        if not self.local_port:
+            control_host = jm_single().config.get("PAYJOIN", "tor_control_host")
+            control_port = int(jm_single().config.get("PAYJOIN", "tor_control_port"))
+            if str(control_host).startswith('unix:'):
+                control_endpoint = UNIXClientEndpoint(reactor, control_host[5:])
+            else:
+                control_endpoint = TCP4ClientEndpoint(reactor, control_host, control_port)
+            d = txtorcon.connect(reactor, control_endpoint)
+            d.addCallback(self.create_onion_ep)
+            d.addErrback(self.setup_failed)
         else:
-            control_endpoint = TCP4ClientEndpoint(reactor, control_host, control_port)
-        d = txtorcon.connect(reactor, control_endpoint)
-        d.addCallback(self.create_onion_ep)
-        d.addErrback(self.setup_failed)
+            d = Deferred()
+            d.callback(None)
+            d.addCallback(self.create_onion_ep)
         # TODO: add errbacks to the next two calls in
         # the chain:
         d.addCallback(self.onion_listen)
@@ -283,15 +326,19 @@ class SNICKERServerManager(object):
         if self.shutdown_callback:
             self.shutdown_callback()
 
-def snicker_server_start(port):
-    ssm = SNICKERServerManager(port)
+def snicker_server_start(port, local_port=None, hsdir=None):
+    ssm = SNICKERServerManager(port, local_port=local_port, hsdir=hsdir)
     ssm.start_snicker_server_and_tor()
 
 if __name__ == "__main__":
     load_program_config(bs="no-blockchain")
+    # in testing, we can optionally use ephemeral;
+    # in testing or prod we can use persistent:
     if len(sys.argv) < 2:
-        port = 80
+        snicker_server_start(80)
     else:
         port = int(sys.argv[1])
-    snicker_server_start(port)
+        local_port = int(sys.argv[2])
+        hsdir = sys.argv[3]
+        snicker_server_start(port, local_port, hsdir)
     reactor.run()
