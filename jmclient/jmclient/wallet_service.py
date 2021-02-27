@@ -14,7 +14,7 @@ from jmclient.configure import jm_single, get_log
 from jmclient.output import fmt_tx_data
 from jmclient.blockchaininterface import (INF_HEIGHT, BitcoinCoreInterface,
     BitcoinCoreNoHistoryInterface)
-from jmclient.wallet import FidelityBondMixin
+from jmclient.wallet import FidelityBondMixin, BaseWallet
 from jmbase import stop_reactor
 from jmbase.support import jmprint, EXIT_SUCCESS, utxo_to_utxostr, hextobin
 
@@ -309,11 +309,19 @@ class WalletService(Service):
             if x['txid'] in self.active_txids or x['txid'] not in self.old_txs:
                 new_txs.append(x)
         # reset for next polling event:
-        self.old_txs = [x['txid'] for x in txlist if "txid" in x]
-
+        self.old_txs = set(x['txid'] for x in txlist if "txid" in x)
+        # for this invocation of transaction_monitor, we *don't* want
+        # to call `gettransaction` more than once per txid, even if the
+        # `listtransactions` result has multiple instances for different
+        # wallet labels; so we use a temporary variable to cache.
+        gettx_results = {}
         for tx in new_txs:
             txid = tx["txid"]
-            res = self.bci.get_transaction(hextobin(txid))
+            if txid not in gettx_results:
+                res = self.bci.get_transaction(hextobin(txid))
+                gettx_results[txid] = res
+            else:
+                res = gettx_results[txid]
             if not res:
                 continue
             confs = res["confirmations"]
@@ -655,6 +663,45 @@ class WalletService(Service):
 
         self.wallet.set_next_index(mixdepth, address_type, highest_used_index + 1)
 
+    def get_all_transactions(self):
+        """ Get all transactions (spending or receiving) that
+        are currently recorded by our blockchain interface as relating
+        to this wallet, as a list.
+        """
+        res = []
+        processed_txids = []
+        for r in self.bci._yield_transactions(
+            self.get_wallet_name()):
+            txid = r["txid"]
+            if txid not in processed_txids:
+                tx = self.bci.get_transaction(hextobin(txid))
+                res.append(self.bci.get_deser_from_gettransaction(tx))
+                processed_txids.append(txid)
+        return res
+
+    def get_transaction(self, txid):
+        """ If the transaction for txid is an in-wallet
+        transaction, will return a CTransaction object for it;
+        if not, will return None.
+        """
+        tx = self.bci.get_transaction(txid)
+        if not tx:
+            return None
+        return self.bci.get_deser_from_gettransaction(tx)
+
+    def get_block_height(self, blockhash):
+        return self.bci.get_block_height(blockhash)
+
+    def get_transaction_block_height(self, tx):
+        """ Given a CTransaction object tx, return
+        the block height at which it was mined, or False
+        if it is not found in the blockchain (including if
+        it is not a wallet tx and so can't be queried).
+        """
+        txid = tx.GetTxid()[::-1]
+        return self.get_block_height(self.bci.get_transaction(
+            txid)["blockhash"])
+
     def sync_addresses(self):
         """ Triggered by use of --recoversync option in scripts,
         attempts a full scan of the blockchain without assuming
@@ -693,13 +740,14 @@ class WalletService(Service):
                     burner_txes.append((pubkeyhash, gettx))
 
             self.sync_burner_outputs(burner_txes)
-            used_addresses_gen = (tx["address"] for tx in tx_receive)
+            used_addresses_gen = set(tx["address"] for tx in tx_receive)
         else:
             #not fidelity bond wallet, significantly faster sync
-            used_addresses_gen = (tx['address']
+            used_addresses_gen = set(tx['address']
                                   for tx in self.bci._yield_transactions(wallet_name)
                                   if tx['category'] == 'receive')
-
+        # needed for address-reuse check:
+        self.used_addresses = used_addresses_gen
         used_indices = self.get_used_indices(used_addresses_gen)
         jlog.debug("got used indices: {}".format(used_indices))
         gap_limit_used = not self.check_gap_indices(used_indices)
@@ -858,7 +906,8 @@ class WalletService(Service):
 
         for md in range(self.max_mixdepth + 1):
             saved_indices[md] = [0, 0]
-            for address_type in (0, 1):
+            for address_type in (BaseWallet.ADDRESS_TYPE_EXTERNAL,
+                                 BaseWallet.ADDRESS_TYPE_INTERNAL):
                 next_unused = self.get_next_unused_index(md, address_type)
                 for index in range(next_unused):
                     addresses.add(self.get_addr(md, address_type, index))
@@ -895,7 +944,8 @@ class WalletService(Service):
         addresses = set()
 
         for md in range(self.max_mixdepth + 1):
-            for address_type in (1, 0):
+            for address_type in (BaseWallet.ADDRESS_TYPE_INTERNAL,
+                                 BaseWallet.ADDRESS_TYPE_EXTERNAL):
                 old_next = self.get_next_unused_index(md, address_type)
                 for index in range(gap_limit):
                     addresses.add(self.get_new_addr(md, address_type))

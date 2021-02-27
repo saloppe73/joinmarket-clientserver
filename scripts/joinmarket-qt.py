@@ -58,7 +58,7 @@ donation_address_sw = "bc1q5x02zqj5nshw0yhx2s4tj75z6vkvuvww26jak5"
 donation_address_url = "https://bitcoinprivacy.me/joinmarket-donations"
 
 #Version of this Qt script specifically
-JM_GUI_VERSION = '19dev'
+JM_GUI_VERSION = '20dev'
 
 from jmbase import get_log, stop_reactor
 from jmbase.support import DUST_THRESHOLD, EXIT_FAILURE, utxo_to_utxostr,\
@@ -2195,7 +2195,12 @@ tabWidget.addTab(TxHistoryTab(), "Tx History")
 tabWidget.addTab(CoinsTab(), "Coins")
 
 mainWindow.resize(600, 500)
-suffix = ' - Testnet' if get_network() == 'testnet' else ''
+if get_network() == 'testnet':
+    suffix = ' - Testnet'
+elif get_network() == 'signet':
+    suffix = ' - Signet'
+else:
+    suffix = ''
 mainWindow.setWindowTitle(appWindowTitle + suffix)
 tabWidget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 mainWindow.setCentralWidget(tabWidget)

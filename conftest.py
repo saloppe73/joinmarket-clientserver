@@ -115,16 +115,20 @@ def setup(request):
     bitcoin_args = ["-regtest", "-daemon", "-conf=" + bitcoin_conf]
 
     btc_proc = subprocess.call([bitcoin_path + "bitcoind"] + bitcoin_args)
-    time.sleep(4)
-    #generate blocks; segwit activates around block 500-600
     root_cmd = [bitcoin_path + "bitcoin-cli", "-regtest",
                        "-rpcuser=" + bitcoin_rpcusername,
                        "-rpcpassword=" + bitcoin_rpcpassword]
+    # Bitcoin Core v0.21+ does not create default wallet
+    local_command(root_cmd + ["-rpcwait"] +
+        ["createwallet", "jm-test-wallet"])
+    local_command(root_cmd + ["loadwallet", "jm-test-wallet"])
     for i in range(2):
-        cpe = local_command(root_cmd + ["getnewaddress"])
+        cpe = local_command(root_cmd + ["-rpcwallet=jm-test-wallet"] +
+            ["getnewaddress"])
         if cpe.returncode == 0:
             destn_addr = cpe.stdout[:-1].decode('utf-8')
-            local_command(root_cmd + ["generatetoaddress", "301", destn_addr])
+            local_command(root_cmd + ["-rpcwallet=jm-test-wallet"] +
+                ["generatetoaddress", "301", destn_addr])
         else:
             pytest.exit("Cannot setup tests, bitcoin-cli failing.\n" +
                 str(cpe.stdout))

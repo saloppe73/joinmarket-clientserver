@@ -113,10 +113,11 @@ use_ssl = false
 # Use 'no-blockchain' to run the ob-watcher.py script in scripts/obwatch without current access
 # to Bitcoin Core; note that use of this option for any other purpose is currently unsupported.
 blockchain_source = bitcoin-rpc
-# options: testnet, mainnet
+# options: signet, testnet, mainnet
 # Note: for regtest, use network = testnet
 network = mainnet
 rpc_host = localhost
+# default ports are 8332 for mainnet, 18443 for regtest, 18332 for testnet, 38332 for signet
 rpc_port = 8332
 rpc_user = bitcoin
 rpc_password = password
@@ -161,7 +162,7 @@ socks5_port = 9050
 #socks5_port = 9050
 #
 ##for tor
-##host = cfyfz6afpgfeirst.onion
+##host = agora3cdw6kdty5y.onion
 ##port = 6667
 ##usessl = false
 ##socks5 = true
@@ -216,6 +217,22 @@ tx_fees = 3
 # Core has its own sanity check limit, which is currently
 # 1,000,000 satoshis.
 absurd_fee_per_kb = 350000
+
+# In decimal, the maximum allowable change either lower or
+# higher, that the fee rate used for coinjoin sweeps is
+# allowed to be.
+# (note: coinjoin sweeps *must estimate* fee rates;
+# they cannot be exact due to the lack of change output.)
+#
+# Example: max_sweep_fee_change = 0.4, with tx_fees = 10000,
+# means actual fee rate achieved in the sweep can be as low
+# as 6000 sats/kilo-vbyte up to 14000 sats/kilo-vbyte.
+#
+# If this is not achieved, the transaction is aborted. For tumbler,
+# it will then be retried until successful.
+# WARNING: too-strict setting may result in using up a lot
+# of PoDLE commitments, hence the default 0.8 (80%).
+max_sweep_fee_change = 0.8
 
 # Maximum absolute coinjoin fee in satoshi to pay to a single
 # market maker for a transaction. Both the limits given in
@@ -306,6 +323,10 @@ accept_commitment_broadcasts = 1
 #and those you want to use in future), relative to the scripts directory.
 commit_file_location = cmtdata/commitments.json
 
+##############################
+# END OF ANTI-SNOOPING SETTINGS
+##############################
+
 [PAYJOIN]
 # for the majority of situations, the defaults
 # need not be altered - they will ensure you don't pay
@@ -349,6 +370,53 @@ tor_control_port = 9051
 # this feature is not yet implemented in code, but here for the
 # future:
 hidden_service_ssl = false
+
+[YIELDGENERATOR]
+# [string, 'reloffer' or 'absoffer'], which fee type to actually use
+ordertype = reloffer
+
+# [satoshis, any integer] / absolute offer fee you wish to receive for coinjoins (cj)
+cjfee_a = 500
+
+# [fraction, any str between 0-1] / relative offer fee you wish to receive based on a cj's amount
+cjfee_r = 0.00002
+
+# [fraction, 0-1] / variance around the average fee. Ex: 200 fee, 0.2 var = fee is btw 160-240
+cjfee_factor = 0.1
+
+# [satoshis, any integer] / the average transaction fee you're adding to coinjoin transactions
+txfee = 100
+
+# [fraction, 0-1] / variance around the average fee. Ex: 1000 fee, 0.2 var = fee is btw 800-1200
+txfee_factor = 0.3
+
+# [satoshis, any integer] / minimum size of your cj offer. Lower cj amounts will be disregarded
+minsize = 100000
+
+# [fraction, 0-1] / variance around all offer sizes. Ex: 500k minsize, 0.1 var = 450k-550k
+size_factor = 0.1
+
+gaplimit = 6
+
+[SNICKER]
+
+# any other value than 'true' will be treated as False,
+# and no SNICKER actions will be enabled in that case:
+enabled = false
+
+# in satoshis, we require any SNICKER to pay us at least
+# this much (can be negative), otherwise we will refuse
+# to sign it:
+lowest_net_gain = 0
+
+# comma separated list of servers (if port is omitted as :port, it
+# is assumed to be 80) which we will poll against (all, in sequence); note
+# that they are allowed to be *.onion or cleartext servers, and no
+# scheme (http(s) etc) needs to be added to the start.
+servers = cn5lfwvrswicuxn3gjsxoved6l2gu5hdvwy5l3ev7kg6j7lbji2k7hqd.onion,
+
+# how many minutes between each polling event to each server above:
+polling_interval_minutes = 60
 """
 
 #This allows use of the jmclient package with a
@@ -414,8 +482,40 @@ def get_config_irc_channel(channel_name):
     channel = "#" + channel_name
     if get_network() == 'testnet':
         channel += '-test'
+    elif get_network() == 'signet':
+        channel += '-sig'
     return channel
 
+class JMPluginService(object):
+    """ Allows us to configure on-startup
+    any additional service (such as SNICKER).
+    For now only covers logging.
+    """
+    def __init__(self, name, requires_logging=True):
+        self.name = name
+        self.requires_logging = requires_logging
+
+    def start_plugin_logging(self, wallet):
+        """ This requires the name of the active wallet
+        to set the logfile; TODO other plugin services may
+        need a different setup.
+        """
+        self.wallet = wallet
+        self.logfilename = "{}-{}.log".format(self.name,
+                            self.wallet.get_wallet_name())
+        self.start_logging()
+
+    def set_log_dir(self, logdirname):
+        self.logdirname = logdirname
+
+    def start_logging(self):
+        logFormatter = logging.Formatter(
+            ('%(asctime)s [%(levelname)-5.5s] {} - %(message)s'.format(
+                self.name)))
+        fileHandler = logging.FileHandler(
+        self.logdirname + '/{}'.format(self.logfilename))
+        fileHandler.setFormatter(logFormatter)
+        get_log().addHandler(fileHandler)
 
 def get_network():
     """Returns network name"""
@@ -460,7 +560,7 @@ def remove_unwanted_default_settings(config):
         if section.startswith('MESSAGING:'):
             config.remove_section(section)
 
-def load_program_config(config_path="", bs=None):
+def load_program_config(config_path="", bs=None, plugin_services=[]):
     global_singleton.config.readfp(io.StringIO(defaultconfig))
     if not config_path:
         config_path = lookup_appdata_folder(global_singleton.APPNAME)
@@ -547,15 +647,38 @@ def load_program_config(config_path="", bs=None):
         global_singleton.commit_file_location = global_singleton.config.get(
             "POLICY", "commit_file_location")
     except NoOptionError: #pragma: no cover
-        log.debug("No commitment file location in config, using default "
+        if get_network() == "mainnet":
+            log.debug("No commitment file location in config, using default "
                   "location cmtdata/commitments.json")
     if get_network() != "mainnet":
         # no need to be flexible for tests; note this is used
-        # for regtest as well as testnet(3)
-        global_singleton.commit_file_location = "cmtdata/testnet_commitments.json"
+        # for regtest, signet and testnet3
+        global_singleton.commit_file_location = "cmtdata/" + get_network() + \
+            "_commitments.json"
     set_commitment_file(os.path.join(config_path,
                                          global_singleton.commit_file_location))
 
+    for p in plugin_services:
+        # for now, at this config level, the only significance
+        # of a "plugin" is that it keeps its own separate log.
+        # We require that a section exists in the config file,
+        # and that it has enabled=true:
+        assert isinstance(p, JMPluginService)
+        if not (global_singleton.config.has_section(p.name) and \
+                global_singleton.config.has_option(p.name, "enabled") and \
+                global_singleton.config.get(p.name, "enabled") == "true"):
+            break
+        if p.requires_logging:
+            # make sure the environment can accept a logfile by
+            # creating the directory in the correct place,
+            # and setting that in the plugin object; the plugin
+            # itself will switch on its own logging when ready,
+            # attaching a filehandler to the global log.
+            plogsdir = os.path.join(os.path.dirname(
+            global_singleton.config_location), "logs", p.name)
+            if not os.path.exists(plogsdir):
+                os.makedirs(plogsdir)
+            p.set_log_dir(plogsdir)
 
 def load_test_config(**kwargs):
     if "config_path" not in kwargs:
@@ -595,7 +718,7 @@ def get_blockchain_interface_instance(_config):
         BitcoinCoreNoHistoryInterface
     source = _config.get("BLOCKCHAIN", "blockchain_source")
     network = get_network()
-    testnet = network == 'testnet'
+    testnet = (network == 'testnet' or network == 'signet')
 
     if source in ('bitcoin-rpc', 'regtest', 'bitcoin-rpc-no-history'):
         rpc_host = _config.get("BLOCKCHAIN", "rpc_host")

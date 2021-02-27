@@ -35,6 +35,8 @@ followed a manual installation as per [here](INSTALL.md)).
 
    j. [What is the Gap Limit](#gaplimit)
 
+   k. [Co-signing a PSBT](#psbt)
+
 4. [Try out a coinjoin; using sendpayment.py](#try-coinjoin)
 
 5. [Running a "Maker" or "yield generator"](#run-maker)
@@ -66,7 +68,7 @@ You should see the following files and folders for an initial setup:
 `joinmarket.cfg` is the main configuration file for Joinmarket and has a lot of settings, several of which you'll want to edit or at least examine.
 This will be discussed in several of the sections below.
 The `wallets/` directory is where wallet files, extension (by default) of `.jmdat` are stored after you create them. They are encrypted and store important information; without them, it is possible to recover your coins with the seedphrase, but can be a hassle, so keep the file safe.
-The `logs/` directory contains a log file for each bot you run (Maker or Taker), with debug information. You'll rarely need to read these files unless you encounter a problem; deleting them regularly is recommended (and never dangerous). However there are other log files kept here, in particular one called `yigen-statement.csv` which records all transactions your Maker bot does over time. This can be useful for keeping track. Additionall, tumbles have a `TUMBLE.schedule` and `TUMBLE.log` file here which can be very useful; don't delete these.
+The `logs/` directory contains a log file for each bot you run (Maker or Taker), with debug information. You'll rarely need to read these files unless you encounter a problem; deleting them regularly is recommended (and never dangerous). However there are other log files kept here, in particular one called `yigen-statement.csv` which records all transactions your Maker bot does over time. This can be useful for keeping track. Additionally, tumbles have a `TUMBLE.schedule` and `TUMBLE.log` file here which can be very useful; don't delete these.
 The `cmtdata/` directory stores technical information that you will not need to read.
 
 <a name="portability" />
@@ -402,6 +404,19 @@ You can create as many addresses as you like, but not all of them will appear th
 
 When you are starting JoinMarket it does not know which is the last address used. So you start at the beginning and see what is on the blockchain. Then you look for the next one in the sequence. The gap limit is how many *misses* you accept before you give up and stop looking. The same concept is used in other deterministic wallets like Electrum.
 
+<a name="psbt" />
+
+### Co-signing a PSBT
+
+Joinmarket now (version 0.8.1+) has (limited) PSBT support. You can take a PSBT from another source, which has created a transaction spending some of your utxos, as well as others, and co-sign it (for example, a custom coinjoin). If your wallet recognizes the coins as belonging to you, it will sign them and present the transaction ready for broadcast, if the signing is complete. **BE CAREFUL USING THIS FEATURE**. This is, for now, intended to be a manual process; before broadcasting a transaction, you **MUST** carefully read the presented information to ensure you are not spending coins you don't intend to. This feature should work with both native and p2sh segwit wallets (but not tested with non-segwit). For creating such PSBTs in other wallets, before co-signing them here, you will probably need to use the xpub of the account (mixdepth) as shown in the output of `wallet-tool.py` default method `display`; for general analysis of what's going on, don't forget you can use `wallet-tool.py` method `showutxos`.
+
+The syntax is:
+
+`python wallet-tool.py mywalletname.jmdat signpsbt <base64-psbt>`.
+
+Note that you only need the PSBT itself, you don't need e.g. mixdepth or other metadata, the tool will figure out for itself whether this wallet is able to co-sign. If it does not end with a "finalized" (fully signed) PSBT, it will in any case output the latest "updated" PSBT and tell you how many signings it did.
+
+
 <a name="try-coinjoin" />
 
 ## Try out a coinjoin; using `sendpayment.py`
@@ -454,6 +469,8 @@ There are two different types of fee; bitcoin network transaction fees and fees 
 
 This is controlled using the setting of `tx_fees` in the `[POLICY]` section in your `joinmarket.cfg` file in the current directory. If you set it to a number between 1 and 1000 it is treated as the targeted number of blocks for confirmation; e.g. if you set it to 20 you are asking to use whatever Bitcoin Core thinks is a realistic fee to get confirmation within the next 20 blocks. By default it is 3. If you set it to a number > 1000, don't set it lower than about 1200, it will be interpreted as "number of satoshis per kilobyte for the transaction fee". 1000 equates to 1 satoshi per byte (ignoring technical details of vbyte), which is usually the minimum fee that nodes on the network will relay. Note that Joinmarket will deliberately vary your choice randomly, in this case, by 20% either side, to avoid you watermarking all your transactions with the exact same fee rate. As an example, if you prefer to use an approximate rate of 20 sats/byte rather than rely on Bitcoin Core's estimated target for 3 or 6 blocks, then set `tx_fees` to 20000.
 Note that some liquidity providers (Makers) will offer very small contributions to the tx fee, but mostly you should consider that you must pay the whole Bitcoin network fee yourself, as an instigator of a coinjoin (a Taker). Note also that if you set 7 counterparties, you are effectively paying for approximately 7 normal sized transactions; be cognizant of that!
+
+An additional note for coinjoin sweeps: we must *estimate* the fee in this case (due to not having a change output). See the comments to the `joinmarket.cfg` setting `max_sweep_fee_change` for how you can control the variance of the fee, for this specific case.
 
 #### CoinJoin fees.
 
